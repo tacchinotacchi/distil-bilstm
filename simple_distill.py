@@ -13,7 +13,7 @@ from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 from torchtext import data
 from torchtext.vocab import pretrained_aliases, Vocab
 
-from tqdm.autonotebook import tqdm, trange
+from tqdm import tqdm, trange
 
 from transformers import (AdamW, WarmupLinearSchedule, BertConfig, BertForSequenceClassification, BertTokenizer)
 
@@ -94,7 +94,7 @@ class Trainer():
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         self.train_dataloader = data.Iterator(self.train_dataset, self.batch_size, train=True, device=self.device)
         if self.val_dataset is not None:
-            self.val_dataloader = data.Iterator(self.val_dataset, self.batch_size, train=False, device=self.device)
+            self.val_dataloader = data.Iterator(self.val_dataset, self.batch_size, train=False, sort_key=lambda x: len(x.fasttext), device=self.device)
         else:
             self.val_dataloader = None
         self.tb_loss = 0
@@ -148,7 +148,7 @@ class Trainer():
         training_it = trange(epochs, desc="Training")
         for epoch in training_it:
             data_it = iter(self.train_dataloader)
-            data_it = tqdm(data_it, desc="Epoch %d" % epoch)
+            data_it = tqdm(data_it, desc="Epoch %d" % epoch, total=len(self.train_dataset) // self.batch_size)
             for batch in data_it:
                 batch = self.process_batch(batch)
                 self.train_step(batch, max_steps)
@@ -156,16 +156,18 @@ class Trainer():
                 training_it.close()
                 break
     def evaluate(self):
-        data_it = iter(self.val_dataloader)
         val_loss = val_accuracy = 0.0
         loss_func = nn.CrossEntropyLoss(reduction="sum")
-        for batch in tqdm(data_id, desc="Evaluation"):
+        data_it = iter(self.val_dataloader)
+        data_it = tqdm(data_it, desc="Evaluation", total=len(self.val_dataset) // self.batch_size)
+        for batch in data_it:
             fasttext_tokens, _, labels, length, _ = self.process_batch(batch)
             with torch.no_grad():
-                output = self.student_model(fasttext_tokens, length)
+                output = self.model(fasttext_tokens, length)
                 loss = loss_func(output, labels)
                 val_loss += loss.item()
                 val_accuracy += (output.argmax(dim=-1) == labels).sum().item()
+        data_it.close()
         val_loss /= len(self.val_dataset)
         val_accuracy /= len(self.val_dataset)
         return {
@@ -251,12 +253,12 @@ if __name__ == "__main__":
     #bert_model = BertForSequenceClassification.from_pretrained("./bert_tuned_weights").to(device)
     bert_tokenizer = BertTokenizer.from_pretrained("./bert_tuned_weights", do_lower_case=True)
     train_dataset, valid_dataset, vocab_data = load_data(args.data_dir, bert_tokenizer)
-    
+
     fasttext_vocab = vocab_data["fasttext_vocab"]
     student_model = BiLSTMClassifier(2, len(fasttext_vocab.itos), fasttext_vocab.vectors.shape[-1],
         lstm_hidden_size=400, classif_hidden_size=1000).to(device)
     
     trainer = Trainer(student_model, train_dataset,
         vocab_data["fasttext_vocab"].stoi["<pad>"], vocab_data["bert_vocab"].stoi["<pad>"], device,
-        val_dataset=valid_dataset, val_interval=200)
+        val_dataset=valid_dataset, val_interval=500)
     trainer.train(1)
