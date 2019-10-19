@@ -23,14 +23,49 @@ import spacy
 
 spacy_en = spacy.load("en")
 
-class BiLSTMClassifier(nn.Module):
-    def __init__(self, num_classes, vocab_size, embed_size, lstm_hidden_size, classif_hidden_size,
-        lstm_layers=1, dropout_rate=0.0):
+class MultiChannelEmbedding(nn.Module):
+    def __init__(self, vocab_size, embed_size, filters_size=64, filters=[2, 4, 6], dropout_rate=0.0):
         super().__init__()
         self.vocab_size = vocab_size
         self.embed_size = embed_size
+        self.filters_size = filters_size
+        self.filters = filters
+        self.dropout_rate = dropout_rate
+        self.embedding = nn.Embedding(self.vocab_size, self.embed_size)
+        self.conv1 = nn.ModuleList([
+            nn.Conv1d(self.embed_size, filters_size, kernel_size=f, padding=f//2)
+            for f in filters
+        ])
+        self.act = nn.Sequential(
+            nn.ReLU(inplace=True),
+            #nn.Dropout(p=dropout_rate)
+        )
+    def init_embedding(self, weight):
+        self.embedding.weight = nn.Parameter(weight.to(self.embedding.weight.device))
+    def forward(self, x):
+        x = x.transpose(0, 1)
+        x = self.embedding(x).transpose(1, 2)
+        channels = []
+        for c in self.conv1:
+            channels.append(c(x))
+        x = F.relu(torch.cat(channels, 1))
+        x = x.transpose(1, 2).transpose(0, 1)
+        return x
+        
+
+class BiLSTMClassifier(nn.Module):
+    def __init__(self, num_classes, vocab_size, embed_size, lstm_hidden_size, classif_hidden_size,
+        lstm_layers=1, dropout_rate=0.0, use_multichannel_embedding=False):
+        super().__init__()
+        self.vocab_size = vocab_size
         self.lstm_hidden_size = lstm_hidden_size
-        self.embeddings = nn.Embedding(self.vocab_size, self.embed_size)
+        self.use_multichannel_embedding = use_multichannel_embedding
+        if self.use_multichannel_embedding:
+            self.embedding = MultiChannelEmbedding(self.vocab_size, embed_size, dropout_rate=dropout_rate)
+            self.embed_size = len(self.embedding.filters) * self.embedding.filters_size
+        else:
+            self.embedding = nn.Embedding(self.vocab_size, embed_size)
+            self.embed_size = embed_size
         self.lstm = nn.LSTM(self.embed_size, self.lstm_hidden_size, lstm_layers, bidirectional=True, dropout=dropout_rate)
         self.classifier = nn.Sequential(
             nn.Linear(lstm_hidden_size*2, classif_hidden_size),
@@ -38,22 +73,28 @@ class BiLSTMClassifier(nn.Module):
             nn.Dropout(p=dropout_rate),
             nn.Linear(classif_hidden_size, num_classes)
         )
+    def init_embedding(self, weight):
+        if self.use_multichannel_embedding:
+            self.embedding.init_embedding(weight)
+        else:
+            self.embedding.weight = nn.Parameter(weight.to(self.embedding.weight.device))
     def forward(self, seq, length):
         # sort batch
         seq_size, batch_size = seq.size(0), seq.size(1)
         length_perm = (-length).argsort()
-        length_perm_inv = torch.arange(batch_size, device=seq.device)[length_perm]
+        length_perm_inv = length_perm.argsort()
         seq = torch.gather(seq, 1, length_perm[None, :].expand(seq_size, batch_size))
         length = torch.gather(length, 0, length_perm)
         # compute
-        seq = self.embeddings(seq)
+        seq = self.embedding(seq)
         seq = pack_padded_sequence(seq, length)
         features = self.lstm(seq)[0]
         features = pad_packed_sequence(features)[0]
         features = features.view(seq_size, batch_size, 2, -1)
         # index to get forward and backward features
         last_indexes = (length - 1)[None, :, None, None].expand((1, batch_size, 2, features.size(-1)))
-        forward_features = torch.gather(features, 0, last_indexes)[0, :, 0]
+        forward_features = torch.gather(features, 0, last_indexes)
+        forward_features = forward_features[0, :, 0]
         backward_features = features[0, :, 1]
         features = torch.cat((forward_features, backward_features), -1)
         # send through classifier
@@ -102,12 +143,14 @@ class Trainer():
         self.tb_t_loss = 0
     def train_step(self, batch, max_steps):
         fasttext_tokens, bert_tokens, labels, length, attention_mask = batch
+        self.model.train()
         s_logits = self.model(fasttext_tokens, length)
         s_loss = self.student_loss_f(s_logits, labels) / labels.size(0) # like batchmean
         loss = s_loss
         if self.teacher is not None and self.teacher_alpha > 0.0:
             with torch.no_grad():
-                t_logits = self.teacher(bert_tokens, attention_mask=attention_mask)
+                self.teacher.eval()
+                t_logits = self.teacher(bert_tokens, attention_mask=attention_mask)[0]
             if self.teacher_loss == "mse":
                 t_loss = self.teacher_loss_f(s_logits, t_logits)
             elif self.teacher_loss == "kl_div":
@@ -125,6 +168,7 @@ class Trainer():
             self.optimizer.step()
             self.scheduler.step()
             self.model.zero_grad()
+            self.tb_writer.add_scalar("lr", self.scheduler.get_lr()[0], self.global_step)
             self.tb_writer.add_scalar("loss", self.tb_loss / self.gradient_accumulation_steps, self.global_step)
             self.tb_writer.add_scalar("student_loss", self.tb_s_loss / self.gradient_accumulation_steps, self.global_step)
             self.tb_writer.add_scalar("teacher_loss", self.tb_t_loss / self.gradient_accumulation_steps, self.global_step)
@@ -134,6 +178,7 @@ class Trainer():
             self.global_step += 1
         if self.val_dataset and (self.global_step + 1) % self.val_interval == 0:
             results = self.evaluate()
+            print(results)
             for k, v in results.items():
                 self.tb_writer.add_scalar("val_" + k, v, self.global_step)
         self.training_step += 1
@@ -155,15 +200,22 @@ class Trainer():
             if max_steps > 0 and self.global_step >= max_steps:
                 training_it.close()
                 break
-    def evaluate(self):
+    def evaluate(self, eval_teacher=False):
+        if eval_teacher:
+            self.teacher.eval()
+        else:
+            self.model.eval()
         val_loss = val_accuracy = 0.0
         loss_func = nn.CrossEntropyLoss(reduction="sum")
         data_it = iter(self.val_dataloader)
         data_it = tqdm(data_it, desc="Evaluation", total=len(self.val_dataset) // self.batch_size)
         for batch in data_it:
-            fasttext_tokens, _, labels, length, _ = self.process_batch(batch)
+            fasttext_tokens, bert_tokens, labels, length, attention_mask = self.process_batch(batch)
             with torch.no_grad():
-                output = self.model(fasttext_tokens, length)
+                if eval_teacher:
+                    output = self.teacher(bert_tokens, attention_mask=attention_mask)[0]
+                else:
+                    output = self.model(fasttext_tokens, length)
                 loss = loss_func(output, labels)
                 val_loss += loss.item()
                 val_accuracy += (output.argmax(dim=-1) == labels).sum().item()
@@ -210,6 +262,47 @@ def load_tsv(path, row_permutation=None, conversions=None):
             data.append(row)
     return data
 
+class BertVocab:
+    UNK = '<unk>'
+    def __init__(self, stoi):
+        self.stoi = {}
+        for s, idx in stoi.items():
+            if s == "[UNK]":
+                s = "<unk>"
+            elif s == "[PAD]":
+                s = "<pad>"
+            self.stoi[s] = idx
+        self.unk_index = self.stoi[BertVocab.UNK]
+        self.itos = [(s, idx) for s, idx in self.stoi.items()]
+        self.itos.sort(key=lambda x: x[1])
+        self.itos = [s for (s, idx) in self.itos]
+    def _default_unk_index(self):
+        return self.unk_index
+    def __getitem__(self, token):
+        return self.stoi.get(token, self.stoi.get(BertVocab.UNK))
+    def __getstate__(self):
+        # avoid picking defaultdict
+        attrs = dict(self.__dict__)
+        # cast to regular dict
+        attrs['stoi'] = dict(self.stoi)
+        return attrs
+    def __setstate__(self, state):
+        if state.get("unk_index", None) is None:
+            stoi = defaultdict()
+        else:
+            stoi = defaultdict(self._default_unk_index)
+        stoi.update(state['stoi'])
+        state['stoi'] = stoi
+        self.__dict__.update(state)
+    def __eq__(self, other):
+        if self.stoi != other.stoi:
+            return False
+        if self.itos != other.itos:
+            return False
+        return True
+    def __len__(self):
+        return len(self.itos)
+
 def load_data(data_dir, bert_tokenizer):
     splits = [
         load_tsv(os.path.join(data_dir, split_file), row_permutation=(0, 0, 1), conversions=[None, None, int])
@@ -231,8 +324,7 @@ def load_data(data_dir, bert_tokenizer):
     fasttext_vectors = pretrained_aliases["fasttext.en.300d"](cache=".cache/")
     fasttext_field.build_vocab(train_dataset, vectors=fasttext_vectors)
     # set up bert field
-    bert_counter = collections.Counter({(k if k != "[PAD]" else "<pad>"):1 for k in bert_tokenizer.vocab.keys()})
-    bert_field.vocab = Vocab(bert_counter, specials=[])
+    bert_field.vocab = BertVocab(bert_tokenizer.vocab)
     #fasttext_pad_token = fasttext_field.stoi["<pad>"]
     #bert_pad_token = bert_field.vocab.stoi["<pad>"]
     return train_dataset, valid_dataset, {
@@ -243,6 +335,12 @@ def load_data(data_dir, bert_tokenizer):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--teacher_alpha", type=float, default=0.0)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--warmup_steps", type=int, default=0)
+    parser.add_argument("--do_train", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no_cuda", action="store_true")
     args = parser.parse_args()
@@ -250,15 +348,28 @@ if __name__ == "__main__":
     device = torch.device("cuda" if not args.no_cuda and torch.cuda.is_available() else "cpu")
     set_seed(args.seed)
 
-    #bert_model = BertForSequenceClassification.from_pretrained("./bert_tuned_weights").to(device)
+    if args.teacher_alpha > 0.0:
+        bert_model = BertForSequenceClassification.from_pretrained("./bert_tuned_weights").to(device)
+    else:
+        bert_model = None
     bert_tokenizer = BertTokenizer.from_pretrained("./bert_tuned_weights", do_lower_case=True)
     train_dataset, valid_dataset, vocab_data = load_data(args.data_dir, bert_tokenizer)
 
     fasttext_vocab = vocab_data["fasttext_vocab"]
     student_model = BiLSTMClassifier(2, len(fasttext_vocab.itos), fasttext_vocab.vectors.shape[-1],
-        lstm_hidden_size=400, classif_hidden_size=1000).to(device)
+        lstm_hidden_size=400, classif_hidden_size=800, dropout_rate=0.15, use_multichannel_embedding=True).to(device)
+    fasttext_emb = fasttext_vocab.vectors.to(device)
+    student_model.init_embedding(fasttext_emb)
     
     trainer = Trainer(student_model, train_dataset,
         vocab_data["fasttext_vocab"].stoi["<pad>"], vocab_data["bert_vocab"].stoi["<pad>"], device,
-        val_dataset=valid_dataset, val_interval=500)
-    trainer.train(1)
+        val_dataset=valid_dataset, val_interval=100,
+        batch_size=args.batch_size, lr=args.lr, warmup_steps=args.warmup_steps,
+        teacher=bert_model, teacher_alpha=args.teacher_alpha)
+    if bert_model is not None:
+        print("Evaluating teacher:")
+        print(trainer.evaluate(eval_teacher=True))
+    if args.do_train:
+        trainer.train(args.epochs)
+    print("Evaluating model:")
+    print(trainer.evaluate())
