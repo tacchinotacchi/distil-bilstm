@@ -1,4 +1,5 @@
 import os
+import re
 import csv
 from collections import OrderedDict
 
@@ -18,11 +19,14 @@ class BertVocab:
     UNK = '<unk>'
     def __init__(self, stoi):
         self.stoi = OrderedDict()
+        pattern = re.compile(r"\[(.*)\]")
         for s, idx in stoi.items():
-            if s == "[UNK]":
-                s = "<unk>"
-            elif s == "[PAD]":
-                s = "<pad>"
+            s = s.lower()
+            m = pattern.match(s)
+            if m:
+                content = m.group(1)
+                print(content)
+                s = "<%s>" % content
             self.stoi[s] = idx
         self.unk_index = self.stoi[BertVocab.UNK]
         self.itos = [(s, idx) for s, idx in self.stoi.items()]
@@ -74,15 +78,31 @@ def load_tsv(path, row_permutation=None, conversions=None):
             data.append(row)
     return data
 
-def load_data(data_dir, bert_tokenizer):
-    splits = [
-        load_tsv(os.path.join(data_dir, split_file), row_permutation=(0, 0, 1), conversions=[None, None, int])
-        for split_file in ("train.tsv", "dev.tsv")
-    ]
+def infer(model, vocab, sentence):
+    seq = spacy_tokenizer(sentence)
+    with torch.no_grad():
+        seq = torch.tensor([[vocab.stoi[t.lower()]] for t in seq], dtype=torch.int64, device=next(model.parameters()).device)
+        length = torch.tensor([seq.size(0)], dtype=torch.int64, device=seq.device)
+        output = model(seq, length)
+    return output
+
+def load_data(data_dir, bert_tokenizer=None, augmented=False):
     fasttext_field = data.Field(sequential=True, tokenize=spacy_tokenizer, lower=True)
-    bert_field = data.Field(sequential=True, tokenize=bert_tokenizer.tokenize, lower=True, batch_first=True)
     label_field = data.Field(sequential=False, use_vocab=False)
-    fields = [("fasttext", fasttext_field), ("bert", bert_field), ("label", label_field)]
+    if bert_tokenizer is not None:
+        bert_field = data.Field(sequential=True, tokenize=bert_tokenizer.tokenize, lower=True, batch_first=True)
+        perm, convs = (0, 0, 1), (None, None, int)
+        fields = [("fasttext", fasttext_field), ("bert", bert_field), ("label", label_field)]
+    else:
+        perm, convs = (0, 1), (None, int)
+        fields = [("fasttext", fasttext_field), ("label", label_field)]
+    splits = [
+        load_tsv(os.path.join(data_dir, split_file), row_permutation=perm, conversions=convs)
+        for split_file in (
+            ("augmented.tsv" if augmented else "train.tsv"),
+            "dev.tsv"
+        )
+    ]
     examples = [
         [data.Example.fromCSV(item, fields) for item in split]
         for split in splits
@@ -95,10 +115,11 @@ def load_data(data_dir, bert_tokenizer):
     fasttext_vectors = pretrained_aliases["fasttext.en.300d"](cache=".cache/")
     fasttext_field.build_vocab(train_dataset, vectors=fasttext_vectors)
     # set up bert field
-    bert_field.vocab = BertVocab(bert_tokenizer.vocab)
+    if bert_tokenizer is not None:
+        bert_field.vocab = BertVocab(bert_tokenizer.vocab)
     #fasttext_pad_token = fasttext_field.stoi["<pad>"]
     #bert_pad_token = bert_field.vocab.stoi["<pad>"]
     return train_dataset, valid_dataset, {
         "fasttext_vocab": fasttext_field.vocab,
-        "bert_vocab": bert_field.vocab
+        "bert_vocab": bert_field.vocab if bert_tokenizer is not None else None
     }

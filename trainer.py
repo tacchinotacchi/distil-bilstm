@@ -14,7 +14,8 @@ class Trainer():
         training_tokens="fasttext",
         teacher=None, teacher_alpha=0.0, teacher_loss = "mse",
         val_dataset=None, val_interval=1,
-        gradient_accumulation_steps = 1, max_grad_norm=1.0,
+        checkpt_callback=None, checkpt_interval=1,
+        gradient_accumulation_steps=1, max_grad_norm=1.0,
         warmup_steps=0, batch_size=50, lr=5e-5, weight_decay=0.0):
         # storing
         self.model = model
@@ -28,6 +29,8 @@ class Trainer():
         self.teacher_loss = teacher_loss
         self.val_dataset = val_dataset
         self.val_interval = val_interval
+        self.checkpt_callback = checkpt_callback
+        self.checkpt_interval = checkpt_interval
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.max_grad_norm = max_grad_norm
         self.warmup_steps = warmup_steps
@@ -57,7 +60,6 @@ class Trainer():
         else:
             s_logits = self.model(bert_tokens, attention_mask=attention_mask)[0]
         s_loss = self.student_loss_f(s_logits, labels) / labels.size(0) # like batchmean
-        loss = s_loss
         if self.teacher is not None and self.teacher_alpha > 0.0:
             with torch.no_grad():
                 self.teacher.eval()
@@ -69,7 +71,9 @@ class Trainer():
                     F.log_softmax(s_logits / self.temperature, dim=-1),
                     F.softmax(t_logits / self.temperature, dim=-1)
                 ) / self.temperature**2
-            loss = (1.0 - self.teacher_alpha) * s_loss + self.teacher_alpha * t_loss
+        else:
+            t_loss = 0.0
+        loss = (1.0 - self.teacher_alpha) * s_loss + self.teacher_alpha * t_loss
         self.tb_loss += loss.item()
         self.tb_s_loss += s_loss.item()
         self.tb_t_loss += t_loss.item() if (self.teacher is not None and self.teacher_alpha > 0.0) else 0.0
@@ -87,11 +91,13 @@ class Trainer():
             self.tb_s_loss = 0
             self.tb_t_loss = 0
             self.global_step += 1
-        if self.val_dataset and (self.global_step + 1) % self.val_interval == 0:
+        if self.val_dataset is not None and (self.global_step + 1) % self.val_interval == 0:
             results = self.evaluate()
             print(results)
             for k, v in results.items():
                 self.tb_writer.add_scalar("val_" + k, v, self.global_step)
+        if self.checkpt_callback is not None and (self.global_step + 1) % self.checkpt_interval == 0:
+            self.checkpt_callback(self.model, self.global_step)
         self.training_step += 1
     def train(self, epochs=1, max_steps=-1):
         self.global_step = 0

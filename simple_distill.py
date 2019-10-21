@@ -11,7 +11,7 @@ from torchtext.vocab import pretrained_aliases, Vocab
 from transformers import (BertConfig, BertForSequenceClassification, BertTokenizer)
 
 from trainer import Trainer
-from utils import set_seed, load_data, BertVocab
+from utils import set_seed, load_data, infer, BertVocab
 
 class MultiChannelEmbedding(nn.Module):
     def __init__(self, vocab_size, embed_size, filters_size=64, filters=[2, 4, 6], dropout_rate=0.0):
@@ -103,6 +103,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
+    parser.add_argument("--augmented", action="store_true")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--teacher_alpha", type=float, default=0.0)
     parser.add_argument("--batch_size", type=int, default=64)
@@ -113,6 +114,8 @@ if __name__ == "__main__":
     parser.add_argument("--no_cuda", action="store_true")
     args = parser.parse_args()
 
+    if not os.path.isdir(args.output_dir):
+        os.mkdir(args.output_dir)
     device = torch.device("cuda" if not args.no_cuda and torch.cuda.is_available() else "cpu")
     set_seed(args.seed)
 
@@ -121,17 +124,19 @@ if __name__ == "__main__":
     else:
         bert_model = None
     bert_tokenizer = BertTokenizer.from_pretrained("./bert_large_tuned", do_lower_case=True)
-    train_dataset, valid_dataset, vocab_data = load_data(args.data_dir, bert_tokenizer)
+    train_dataset, valid_dataset, vocab_data = load_data(args.data_dir, bert_tokenizer=bert_tokenizer, augmented=args.augmented)
 
     fasttext_vocab = vocab_data["fasttext_vocab"]
     student_model = BiLSTMClassifier(2, len(fasttext_vocab.itos), fasttext_vocab.vectors.shape[-1],
-        lstm_hidden_size=400, classif_hidden_size=800, dropout_rate=0.15).to(device)
+        lstm_hidden_size=300, classif_hidden_size=400, dropout_rate=0.1).to(device)
     fasttext_emb = fasttext_vocab.vectors.to(device)
     student_model.init_embedding(fasttext_emb)
     
     trainer = Trainer(student_model, train_dataset,
         vocab_data["fasttext_vocab"].stoi["<pad>"], vocab_data["bert_vocab"].stoi["<pad>"], device,
         val_dataset=valid_dataset, val_interval=100,
+        checkpt_callback=lambda m, step: save_bilstm(m, os.path.join(args.output_dir, "checkpt_%d" % step)),
+        checkpt_interval=500,
         batch_size=args.batch_size, lr=args.lr, warmup_steps=args.warmup_steps,
         teacher=bert_model, teacher_alpha=args.teacher_alpha)
     if bert_model is not None:
