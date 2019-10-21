@@ -37,6 +37,7 @@ class BertVocab:
     def __getitem__(self, token):
         return self.stoi.get(token, self.stoi.get(BertVocab.UNK))
     def __getstate__(self):
+        # TODO what does this do?
         # avoid picking defaultdict
         attrs = dict(self.__dict__)
         # cast to regular dict
@@ -117,8 +118,6 @@ def load_data(data_dir, bert_tokenizer=None, augmented=False):
     # set up bert field
     if bert_tokenizer is not None:
         bert_field.vocab = BertVocab(bert_tokenizer.vocab)
-    #fasttext_pad_token = fasttext_field.stoi["<pad>"]
-    #bert_pad_token = bert_field.vocab.stoi["<pad>"]
     return train_dataset, valid_dataset, {
         "fasttext_vocab": fasttext_field.vocab,
         "bert_vocab": bert_field.vocab if bert_tokenizer is not None else None

@@ -11,7 +11,6 @@ from tqdm import tqdm, trange
 
 class Trainer():
     def __init__(self, model, train_dataset, fasttext_pad_token, bert_pad_token, device,
-        training_tokens="fasttext",
         teacher=None, teacher_alpha=0.0, teacher_loss = "mse",
         val_dataset=None, val_interval=1,
         checkpt_callback=None, checkpt_interval=1,
@@ -23,7 +22,6 @@ class Trainer():
         self.fasttext_pad_token = fasttext_pad_token
         self.bert_pad_token = bert_pad_token
         self.device = device
-        self.training_tokens = training_tokens
         self.teacher = teacher
         self.teacher_alpha = teacher_alpha
         self.teacher_loss = teacher_loss
@@ -55,10 +53,7 @@ class Trainer():
     def train_step(self, batch, max_steps):
         fasttext_tokens, bert_tokens, labels, length, attention_mask = batch
         self.model.train()
-        if self.training_tokens == "fasttext":
-            s_logits = self.model(fasttext_tokens, length)
-        else:
-            s_logits = self.model(bert_tokens, attention_mask=attention_mask)[0]
+        s_logits = self.model(fasttext_tokens, length)
         s_loss = self.student_loss_f(s_logits, labels) / labels.size(0) # like batchmean
         if self.teacher is not None and self.teacher_alpha > 0.0:
             with torch.no_grad():
@@ -128,11 +123,8 @@ class Trainer():
         data_it = iter(self.val_dataloader)
         data_it = tqdm(data_it, desc="Evaluation", total=len(self.val_dataset) // self.batch_size)
         for batch in data_it:
-            fasttext_tokens, bert_tokens, labels, length, attention_mask = self.process_batch(batch)
+            fasttext_tokens, _, labels, length, _ = self.process_batch(batch)
             with torch.no_grad():
-                if eval_teacher or self.training_tokens == "bert":
-                    output = model(bert_tokens, attention_mask=attention_mask)[0]
-                else:
                     output = model(fasttext_tokens, length)
                 loss = loss_func(output, labels)
                 val_loss += loss.item()
