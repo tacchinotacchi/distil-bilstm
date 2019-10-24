@@ -61,7 +61,7 @@ if __name__ == "__main__":
     parser.add_argument("--input", type=str, required=True)
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--model", type=str, required=True, help="Model to use to generate the new labels")
-    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--no_cuda", action="store_true")
     args = parser.parse_args()
     device = torch.device("cuda" if not args.no_cuda and torch.cuda.is_available() else "cpu")
