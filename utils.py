@@ -25,7 +25,6 @@ class BertVocab:
             m = pattern.match(s)
             if m:
                 content = m.group(1)
-                print(content)
                 s = "<%s>" % content
             self.stoi[s] = idx
         self.unk_index = self.stoi[BertVocab.UNK]
@@ -36,89 +35,31 @@ class BertVocab:
         return self.unk_index
     def __getitem__(self, token):
         return self.stoi.get(token, self.stoi.get(BertVocab.UNK))
-    def __getstate__(self):
-        # TODO what does this do?
-        # avoid picking defaultdict
-        attrs = dict(self.__dict__)
-        # cast to regular dict
-        attrs['stoi'] = dict(self.stoi)
-        return attrs
-    def __setstate__(self, state):
-        if state.get("unk_index", None) is None:
-            stoi = defaultdict()
-        else:
-            stoi = defaultdict(self._default_unk_index)
-        stoi.update(state['stoi'])
-        state['stoi'] = stoi
-        self.__dict__.update(state)
-    def __eq__(self, other):
-        if self.stoi != other.stoi:
-            return False
-        if self.itos != other.itos:
-            return False
-        return True
     def __len__(self):
         return len(self.itos)
 
 def spacy_tokenizer(text):
     return [tok.text for tok in spacy_en.tokenizer(text)]
 
-def load_tsv(path, row_permutation=None, conversions=None):
+def load_tsv(path, skip_header=True):
     with open(path) as f:
         reader = csv.reader(f, delimiter='\t')
-        next(reader)
-        data = []
-        for row in reader:
-            if row_permutation is not None:
-                row = [row[idx] for idx in row_permutation]
-            if conversions is not None:
-                row = [
-                    c(row[idx]) if c is not None else row[idx]
-                    for idx, c in enumerate(conversions)
-                ]
-            data.append(row)
+        if skip_header:
+            next(reader)
+        data = [row for row in reader]
     return data
 
-def infer(model, vocab, sentence):
-    seq = spacy_tokenizer(sentence)
-    with torch.no_grad():
-        seq = torch.tensor([[vocab.stoi[t.lower()]] for t in seq], dtype=torch.int64, device=next(model.parameters()).device)
-        length = torch.tensor([seq.size(0)], dtype=torch.int64, device=seq.device)
-        output = model(seq, length)
-    return output
-
-def load_data(data_dir, bert_tokenizer=None, augmented=False):
-    fasttext_field = data.Field(sequential=True, tokenize=spacy_tokenizer, lower=True)
-    label_field = data.Field(sequential=False, use_vocab=False)
-    if bert_tokenizer is not None:
-        bert_field = data.Field(sequential=True, tokenize=bert_tokenizer.tokenize, lower=True, batch_first=True)
-        perm, convs = (0, 0, 1), (None, None, int)
-        fields = [("fasttext", fasttext_field), ("bert", bert_field), ("label", label_field)]
+def load_data(data_dir, tokenizer, bert_vocab=None, batch_first=False, augmented=False):
+    text_field = data.Field(sequential=True, tokenize=tokenizer, lower=True, batch_first=batch_first)
+    label_field = data.Field(sequential=False, use_vocab=False, dtype=torch.float32 if augmented else torch.long)
+    train_dataset, valid_dataset = data.TabularDataset.splits(
+        path=data_dir, train="augmented.tsv" if augmented else "train.tsv", validation="dev.tsv",
+        format="tsv", skip_header=True,
+        fields=[("text", text_field), ("label", label_field)])
+    if bert_vocab is None:
+        vectors = pretrained_aliases["fasttext.en.300d"](cache=".cache/")
+        text_field.build_vocab(train_dataset, vectors=vectors)
     else:
-        perm, convs = (0, 1), (None, int)
-        fields = [("fasttext", fasttext_field), ("label", label_field)]
-    splits = [
-        load_tsv(os.path.join(data_dir, split_file), row_permutation=perm, conversions=convs)
-        for split_file in (
-            ("augmented.tsv" if augmented else "train.tsv"),
-            "dev.tsv"
-        )
-    ]
-    examples = [
-        [data.Example.fromCSV(item, fields) for item in split]
-        for split in splits
-    ]
-    train_dataset, valid_dataset = [
-        data.Dataset(split, fields)
-        for split in examples
-    ]
-    # set up fasttext field
-    fasttext_vectors = pretrained_aliases["fasttext.en.300d"](cache=".cache/")
-    fasttext_field.build_vocab(train_dataset, vectors=fasttext_vectors)
-    # set up bert field
-    if bert_tokenizer is not None:
-        bert_field.vocab = BertVocab(bert_tokenizer.vocab)
-    return train_dataset, valid_dataset, {
-        "fasttext_vocab": fasttext_field.vocab,
-        "bert_vocab": bert_field.vocab if bert_tokenizer is not None else None
-    }
+        # use bert tokenizer's vocab if supplied
+        text_field.vocab = BertVocab(bert_vocab)
+    return train_dataset, valid_dataset, text_field.vocab

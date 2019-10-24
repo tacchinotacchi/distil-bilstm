@@ -10,7 +10,7 @@ from torchtext import data
 from torchtext.vocab import pretrained_aliases, Vocab
 from transformers import (BertConfig, BertForSequenceClassification, BertTokenizer)
 
-from trainer import Trainer
+from trainer import BertTrainer
 from utils import set_seed, load_data, BertVocab
 
 def save_bert(model, tokenizer, config, output_dir):
@@ -28,28 +28,37 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--lr_schedule", type=str)
     parser.add_argument("--warmup_steps", type=int, default=0)
+    parser.add_argument("--epochs_per_cycle", type=int, default=1)
     parser.add_argument("--do_train", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no_cuda", action="store_true")
+    parser.add_argument("--cache_dir", type=str, help="Custom cache for transformer models")
     args = parser.parse_args()
 
     device = torch.device("cuda" if not args.no_cuda and torch.cuda.is_available() else "cpu")
     set_seed(args.seed)
+    if not os.path.isdir(args.output_dir):
+        os.mkdir(args.output_dir)
 
-    bert_config = BertConfig.from_pretrained("bert-large-uncased")
-    bert_model = BertForSequenceClassification.from_pretrained("bert-large-uncased", config=bert_config).to(device)
-    bert_tokenizer = BertTokenizer.from_pretrained("bert-large-uncased", do_lower_case=True)
-    train_dataset, valid_dataset, vocab_data = load_data(args.data_dir, bert_tokenizer)
+    bert_config = BertConfig.from_pretrained("bert-large-uncased", cache_dir=args.cache_dir)
+    bert_model = BertForSequenceClassification.from_pretrained("bert-large-uncased", config=bert_config, cache_dir=args.cache_dir).to(device)
+    bert_tokenizer = BertTokenizer.from_pretrained("bert-large-uncased", do_lower_case=True, cache_dir=args.cache_dir)
+    train_dataset, valid_dataset, vocab = load_data(args.data_dir, bert_tokenizer.tokenize,
+        bert_vocab=bert_tokenizer.vocab, batch_first=True)
     
-    trainer = Trainer(bert_model, train_dataset,
-        vocab_data["fasttext_vocab"].stoi["<pad>"], vocab_data["bert_vocab"].stoi["<pad>"], device,
-        training_tokens="bert",
-        val_dataset=valid_dataset, val_interval=500,
-        batch_size=args.batch_size, lr=args.lr, warmup_steps=args.warmup_steps,
+    trainer = BertTrainer(bert_model, "cross_entropy", vocab.stoi["<pad>"], device,
+        train_dataset=train_dataset,
+        val_dataset=valid_dataset, val_interval=250,
+        checkpt_callback=lambda m, step: save_bert(m, bert_tokenizer, bert_config, os.path.join(args.output_dir, "checkpt_%d" % step)),
+        checkpt_interval=250,
+        batch_size=args.batch_size, lr=args.lr,
         gradient_accumulation_steps=args.gradient_accumulation_steps)
     if args.do_train:
-        trainer.train(args.epochs)
+        trainer.train(args.epochs, schedule=args.lr_schedule,
+            warmup_steps=args.warmup_steps, epochs_per_cycle=args.epochs_per_cycle)
+
     print("Evaluating model:")
     print(trainer.evaluate())
 

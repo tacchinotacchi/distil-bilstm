@@ -10,8 +10,8 @@ from torchtext import data
 from torchtext.vocab import pretrained_aliases, Vocab
 from transformers import (BertConfig, BertForSequenceClassification, BertTokenizer)
 
-from trainer import Trainer
-from utils import set_seed, load_data, infer, BertVocab
+from trainer import LSTMTrainer
+from utils import set_seed, load_data, spacy_tokenizer
 
 class MultiChannelEmbedding(nn.Module):
     def __init__(self, vocab_size, embed_size, filters_size=64, filters=[2, 4, 6], dropout_rate=0.0):
@@ -40,8 +40,7 @@ class MultiChannelEmbedding(nn.Module):
             channels.append(c(x))
         x = F.relu(torch.cat(channels, 1))
         x = x.transpose(1, 2).transpose(0, 1)
-        return x
-        
+        return x   
 
 class BiLSTMClassifier(nn.Module):
     def __init__(self, num_classes, vocab_size, embed_size, lstm_hidden_size, classif_hidden_size,
@@ -69,29 +68,35 @@ class BiLSTMClassifier(nn.Module):
         else:
             self.embedding.weight = nn.Parameter(weight.to(self.embedding.weight.device))
     def forward(self, seq, length):
-        # sort batch
+        # Sort batch
         seq_size, batch_size = seq.size(0), seq.size(1)
         length_perm = (-length).argsort()
         length_perm_inv = length_perm.argsort()
         seq = torch.gather(seq, 1, length_perm[None, :].expand(seq_size, batch_size))
         length = torch.gather(length, 0, length_perm)
-        # compute
+        # Pack sequence
         seq = self.embedding(seq)
         seq = pack_padded_sequence(seq, length)
-        features = self.lstm(seq)[0]
+        # Send through LSTM
+        features, hidden_states = self.lstm(seq)
+        # Unpack sequence
         features = pad_packed_sequence(features)[0]
+        # Separate last dimension into forward/backward features
         features = features.view(seq_size, batch_size, 2, -1)
-        # index to get forward and backward features
+        # Index to get forward and backward features and concatenate
+        # Gather last word for each sequence
         last_indexes = (length - 1)[None, :, None, None].expand((1, batch_size, 2, features.size(-1)))
         forward_features = torch.gather(features, 0, last_indexes)
+        # Squeeze seq dimension, take forward features
         forward_features = forward_features[0, :, 0]
+        # Take first word, backward features
         backward_features = features[0, :, 1]
         features = torch.cat((forward_features, backward_features), -1)
-        # send through classifier
+        # Send through classifier
         logits = self.classifier(features)
-        # invert batch order
+        # Invert batch permutation
         logits = torch.gather(logits, 0, length_perm_inv[:, None].expand((batch_size, logits.size(-1))))
-        return logits
+        return logits, hidden_states
 
 def save_bilstm(model, output_dir):
     if not os.path.isdir(output_dir):
@@ -105,10 +110,11 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--augmented", action="store_true")
     parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--teacher_alpha", type=float, default=0.0)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--lr_schedule", type=str)
     parser.add_argument("--warmup_steps", type=int, default=0)
+    parser.add_argument("--epochs_per_cycle", type=int, default=1)
     parser.add_argument("--do_train", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no_cuda", action="store_true")
@@ -119,33 +125,23 @@ if __name__ == "__main__":
     device = torch.device("cuda" if not args.no_cuda and torch.cuda.is_available() else "cpu")
     set_seed(args.seed)
 
-    if args.teacher_alpha > 0.0:
-        bert_model = BertForSequenceClassification.from_pretrained("./bert_large_tuned").to(device)
-    else:
-        bert_model = None
-    bert_tokenizer = BertTokenizer.from_pretrained("./bert_large_tuned", do_lower_case=True)
-    train_dataset, valid_dataset, vocab_data = load_data(args.data_dir, bert_tokenizer=bert_tokenizer, augmented=args.augmented)
+    train_dataset, valid_dataset, vocab = load_data(args.data_dir, spacy_tokenizer, augmented=args.augmented)
 
-    fasttext_vocab = vocab_data["fasttext_vocab"]
-    student_model = BiLSTMClassifier(2, len(fasttext_vocab.itos), fasttext_vocab.vectors.shape[-1],
-        lstm_hidden_size=300, classif_hidden_size=400, dropout_rate=0.1).to(device)
-    fasttext_emb = fasttext_vocab.vectors.to(device)
-    student_model.init_embedding(fasttext_emb)
+    model = BiLSTMClassifier(2, len(vocab.itos), vocab.vectors.shape[-1],
+        lstm_hidden_size=300, classif_hidden_size=400, dropout_rate=0.0).to(device)
+    model.init_embedding(vocab.vectors.to(device))
     
-    trainer = Trainer(student_model, train_dataset,
-        vocab_data["fasttext_vocab"].stoi["<pad>"], vocab_data["bert_vocab"].stoi["<pad>"], device,
-        val_dataset=valid_dataset, val_interval=100,
-        checkpt_callback=lambda m, step: save_bilstm(m, os.path.join(args.output_dir, "checkpt_%d" % step)),
-        checkpt_interval=500,
-        batch_size=args.batch_size, lr=args.lr, warmup_steps=args.warmup_steps,
-        teacher=bert_model, teacher_alpha=args.teacher_alpha)
-    if bert_model is not None:
-        print("Evaluating teacher:")
-        print(trainer.evaluate(eval_teacher=True))
+    trainer = LSTMTrainer(model, "cross_entropy", vocab.stoi["<pad>"], device,
+        train_dataset=train_dataset, val_dataset=valid_dataset, val_interval=250,
+        checkpt_callback=lambda m, step: save_bilstm(m, os.path.join(args.output_dir, "checkpt_%d" % step)), checkpt_interval=250,
+        batch_size=args.batch_size, lr=args.lr)
+    
     if args.do_train:
-        trainer.train(args.epochs)
+        trainer.train(args.epochs, schedule=args.lr_schedule,
+            warmup_steps=args.warmup_steps, epochs_per_cycle=args.epochs_per_cycle)
+    
     print("Evaluating model:")
     print(trainer.evaluate())
 
-    save_bilstm(student_model, args.output_dir)
+    save_bilstm(model, args.output_dir)
 

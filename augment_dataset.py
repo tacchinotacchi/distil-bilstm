@@ -4,34 +4,39 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 
-from utils import spacy_en, load_tsv, set_seed
+import torch
+from torchtext import data
+from transformers import BertForSequenceClassification, BertTokenizer
+from trainer import BertTrainer
+from utils import spacy_en, load_tsv, set_seed, BertVocab
 
-def build_pos_vocab(sentences):
-    pos_vocab = {}
+def build_pos_dict(sentences):
+    pos_dict = {}
     for sentence in sentences:
         for word in sentence:   
             pos_tag = word.pos
-            if pos_tag not in pos_vocab:
-                pos_vocab[pos_tag] = []
-            if word.text.lower() not in pos_vocab[pos_tag]:
-                pos_vocab[pos_tag].append(word.text.lower())
-    return pos_vocab
+            if pos_tag not in pos_dict:
+                pos_dict[pos_tag] = []
+            if word.text.lower() not in pos_dict[pos_tag]:
+                pos_dict[pos_tag].append(word.text.lower())
+    return pos_dict
 
 mask_token = "<mask>"
 
-def make_sample(input_sentence, pos_vocab, p_mask=0.1, p_pos=0.1, p_ng=0.25, max_ng=5):
+def make_sample(input_sentence, pos_dict, p_mask=0.1, p_pos=0.1, p_ng=0.25, max_ng=5):
     sentence = []
     for word in input_sentence:
-        # apply single token masking or POS-guided replacing
+        # Apply single token masking or POS-guided replacement
         u = np.random.uniform()
         if u < p_mask:
             sentence.append(mask_token)
         elif u < (p_mask + p_pos):
-            same_pos = pos_vocab[word.pos]
+            same_pos = pos_dict[word.pos]
+            # Pick from list of words with same POS tag
             sentence.append(np.random.choice(same_pos))
         else:
             sentence.append(word.text.lower())
-    # apply n-gram sampling
+    # Apply n-gram sampling
     if len(sentence) > 2 and np.random.uniform() < p_ng:
         n = min(np.random.choice(range(1, 5+1)), len(sentence) - 1)
         start = np.random.choice(len(sentence) - n)
@@ -40,33 +45,57 @@ def make_sample(input_sentence, pos_vocab, p_mask=0.1, p_pos=0.1, p_ng=0.25, max
     return sentence
 
     
-def augment_dataset(input_dataset, pos_vocab, n_iter=20, p_mask=0.1, p_pos=0.1, p_ng=0.25, max_ng=5):
-    dataset = []
-    for p in tqdm(input_dataset, "Generation"):
-        samples = [[word.text.lower() for word in p[0]]]
+def augmentation(sentences, pos_dict, n_iter=20, p_mask=0.1, p_pos=0.1, p_ng=0.25, max_ng=5):
+    augmented = []
+    for sentence in tqdm(sentences, "Generation"):
+        samples = [[word.text.lower() for word in sentence]]
         for _ in range(n_iter):
-            new_sample = make_sample(p[0], pos_vocab, p_mask, p_pos, p_ng, max_ng)
+            new_sample = make_sample(sentence, pos_dict, p_mask, p_pos, p_ng, max_ng)
             if new_sample not in samples:
                 samples.append(new_sample)
-        dataset.extend([[s, p[1]] for s in samples])
-    return dataset
+        augmented.extend(samples)
+    return augmented
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=str, required=True)
     parser.add_argument("--output", type=str, required=True)
+    parser.add_argument("--model", type=str, required=True, help="Model to use to generate the new labels")
+    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--no_cuda", action="store_true")
     args = parser.parse_args()
-
+    device = torch.device("cuda" if not args.no_cuda and torch.cuda.is_available() else "cpu")
     set_seed(42)
-    dataset = load_tsv(args.input, conversions=(None, int))
-    sentences = [spacy_en(text) for text, _ in tqdm(dataset, desc="Loading dataset")]
-    pos_vocab = build_pos_vocab(sentences)
-    for p, s in zip(dataset, sentences):
-        p[0] = s
-    dataset = augment_dataset(dataset, pos_vocab)
+    
+    # Load original tsv file
+    input_tsv = load_tsv(args.input)
+    sentences = [spacy_en(text) for text, _ in tqdm(input_tsv, desc="Loading dataset")]
+
+    # build lists of words indexes by POS tab
+    pos_dict = build_pos_dict(sentences)
+
+    # Generate augmented samples
+    sentences = augmentation(sentences, pos_dict)
+
+    # Load teacher model
+    model = BertForSequenceClassification.from_pretrained(args.model).to(device)
+    tokenizer = BertTokenizer.from_pretrained(args.model, do_lower_case=True)
+
+    # Assign labels with teacher
+    teacher_field = data.Field(sequential=True, tokenize=tokenizer.tokenize, lower=True)
+    fields = [("text", teacher_field)]
+    examples = [
+        data.Example.fromlist([" ".join(words)], fields) for words in sentences
+    ]
+    augmented_dataset = data.Dataset(examples, fields)
+    teacher_field.vocab = BertVocab(tokenizer.vocab)
+    new_labels = BertTrainer(model, "cross_entropy",
+        teacher_field.vocab.stoi["<pad>"], device, batch_size=args.batch_size).infer(augmented_dataset)
+
+    # Write to file
     with open(args.output, "w") as f:
-        f.write("sentence\tlabel\n")
-        for sentence, rating in dataset:
-            f.write(" ".join(sentence) + "\t" + str(rating) + "\n")
+        f.write("sentence\tscore_neg\tscore_pos\n")
+        for sentence, rating in zip(sentences, new_labels):
+            f.write("%s\t%.6f\t%.6f\n" % (sentence, *rating))
         
     
