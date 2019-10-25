@@ -2,7 +2,7 @@ import os
 import argparse
 
 import numpy as np
-from tqdm import tqdm
+from tqdm.autonotebook import tqdm
 
 import torch
 from torchtext import data
@@ -82,20 +82,20 @@ if __name__ == "__main__":
     tokenizer = BertTokenizer.from_pretrained(args.model, do_lower_case=True)
 
     # Assign labels with teacher
-    teacher_field = data.Field(sequential=True, tokenize=tokenizer.tokenize, lower=True)
+    teacher_field = data.Field(sequential=True, tokenize=tokenizer.tokenize, lower=True, include_lengths=True, batch_first=True)
     fields = [("text", teacher_field)]
     examples = [
         data.Example.fromlist([" ".join(words)], fields) for words in sentences
     ]
     augmented_dataset = data.Dataset(examples, fields)
     teacher_field.vocab = BertVocab(tokenizer.vocab)
-    new_labels = BertTrainer(model, "cross_entropy",
-        teacher_field.vocab.stoi["<pad>"], device, batch_size=args.batch_size).infer(augmented_dataset)
+    new_labels = BertTrainer(model, "cross_entropy", device, batch_size=args.batch_size).infer(augmented_dataset)
 
     # Write to file
     with open(args.output, "w") as f:
-        f.write("sentence\tscore_neg\tscore_pos\n")
+        f.write("sentence\tscores\n")
         for sentence, rating in zip(sentences, new_labels):
-            f.write("%s\t%.6f\t%.6f\n" % (sentence, *rating))
+            text = " ".join(sentence)
+            f.write("%s\t%.6f %.6f\n" % (text, *rating))
         
     

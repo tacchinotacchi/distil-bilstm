@@ -68,6 +68,7 @@ class BiLSTMClassifier(nn.Module):
         else:
             self.embedding.weight = nn.Parameter(weight.to(self.embedding.weight.device))
     def forward(self, seq, length):
+        # TODO use sort_within_batch?
         # Sort batch
         seq_size, batch_size = seq.size(0), seq.size(1)
         length_perm = (-length).argsort()
@@ -131,7 +132,7 @@ if __name__ == "__main__":
         lstm_hidden_size=300, classif_hidden_size=400, dropout_rate=0.0).to(device)
     model.init_embedding(vocab.vectors.to(device))
     
-    trainer = LSTMTrainer(model, "cross_entropy", vocab.stoi["<pad>"], device,
+    trainer = LSTMTrainer(model, "mse" if args.augmented else "cross_entropy", device,
         train_dataset=train_dataset, val_dataset=valid_dataset, val_interval=250,
         checkpt_callback=lambda m, step: save_bilstm(m, os.path.join(args.output_dir, "checkpt_%d" % step)), checkpt_interval=250,
         batch_size=args.batch_size, lr=args.lr)

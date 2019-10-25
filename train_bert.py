@@ -48,7 +48,7 @@ if __name__ == "__main__":
     train_dataset, valid_dataset, vocab = load_data(args.data_dir, bert_tokenizer.tokenize,
         bert_vocab=bert_tokenizer.vocab, batch_first=True)
     
-    trainer = BertTrainer(bert_model, "cross_entropy", vocab.stoi["<pad>"], device,
+    trainer = BertTrainer(bert_model, "cross_entropy", device,
         train_dataset=train_dataset,
         val_dataset=valid_dataset, val_interval=250,
         checkpt_callback=lambda m, step: save_bert(m, bert_tokenizer, bert_config, os.path.join(args.output_dir, "checkpt_%d" % step)),

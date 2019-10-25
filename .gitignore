@@ -3,3 +3,4 @@ __pycache__
 runs/
 weights.pth
 events.*
+*.backup
