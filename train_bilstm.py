@@ -130,6 +130,7 @@ if __name__ == "__main__":
 
     model = BiLSTMClassifier(2, len(vocab.itos), vocab.vectors.shape[-1],
         lstm_hidden_size=300, classif_hidden_size=400, dropout_rate=0.0).to(device)
+    # Initialize word embeddings to fasttext
     model.init_embedding(vocab.vectors.to(device))
     
     trainer = LSTMTrainer(model, "mse" if args.augmented else "cross_entropy", device,

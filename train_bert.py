@@ -26,7 +26,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--lr_schedule", type=str)
     parser.add_argument("--warmup_steps", type=int, default=0)
@@ -53,8 +52,7 @@ if __name__ == "__main__":
         val_dataset=valid_dataset, val_interval=250,
         checkpt_callback=lambda m, step: save_bert(m, bert_tokenizer, bert_config, os.path.join(args.output_dir, "checkpt_%d" % step)),
         checkpt_interval=250,
-        batch_size=args.batch_size, lr=args.lr,
-        gradient_accumulation_steps=args.gradient_accumulation_steps)
+        batch_size=args.batch_size, lr=args.lr)
     if args.do_train:
         trainer.train(args.epochs, schedule=args.lr_schedule,
             warmup_steps=args.warmup_steps, epochs_per_cycle=args.epochs_per_cycle)
