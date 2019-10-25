@@ -51,28 +51,34 @@ def load_tsv(path, skip_header=True):
 
 def load_data(data_dir, tokenizer, bert_vocab=None, batch_first=False, augmented=False):
     text_field = data.Field(sequential=True, tokenize=tokenizer, lower=True, include_lengths=True, batch_first=batch_first)
-    label_field_valid = label_field = data.Field(sequential=False, use_vocab=False, dtype=torch.long)
-    fields_valid = [("text", text_field), ("label", label_field_valid)]
+    label_field_class = data.Field(sequential=False, use_vocab=False, dtype=torch.long)
     if augmented:
-        label_field_train = data.Field(sequential=False, batch_first=True, use_vocab=False,
+        # Augmented dataset uses class scores as labels
+        label_field_scores = data.Field(sequential=False, batch_first=True, use_vocab=False,
             preprocessing=lambda x: [float(n) for n in x.split(" ")], dtype=torch.float32)
-        fields_train = [("text", text_field), ("label", label_field_train)]
+        fields_train = [("text", text_field), ("label", label_field_scores)]
     else:
-        fields_train = fields_valid
+        # Original training set uses the class id
+        fields_train = [("text", text_field), ("label", label_field_class)]
     train_dataset = data.TabularDataset(
         path=os.path.join(data_dir, "augmented.tsv" if augmented else "train.tsv"),
         format="tsv",  skip_header=True,
         fields=fields_train
     )
+
+    fields_valid = [("text", text_field), ("label", label_field_class)]
     valid_dataset = data.TabularDataset(
         path=os.path.join(data_dir, "dev.tsv"),
         format="tsv", skip_header=True,
         fields=fields_valid
     )
+
+    # Initialize field's vocabulary
     if bert_vocab is None:
         vectors = pretrained_aliases["fasttext.en.300d"](cache=".cache/")
         text_field.build_vocab(train_dataset, vectors=vectors)
     else:
         # Use bert tokenizer's vocab if supplied
         text_field.vocab = BertVocab(bert_vocab)
+
     return train_dataset, valid_dataset, text_field.vocab
