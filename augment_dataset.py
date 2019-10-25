@@ -58,9 +58,9 @@ def augmentation(sentences, pos_dict, n_iter=20, p_mask=0.1, p_pos=0.1, p_ng=0.2
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=str, required=True)
-    parser.add_argument("--output", type=str, required=True)
-    parser.add_argument("--model", type=str, required=True, help="Model to use to generate the new labels")
+    parser.add_argument("--input", type=str, required=True, help="Input dataset.")
+    parser.add_argument("--output", type=str, required=True, help="Output dataset.")
+    parser.add_argument("--model", type=str, required=True, help="Model to use to generate the labels for the augmented dataset.")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--no_cuda", action="store_true")
     args = parser.parse_args()

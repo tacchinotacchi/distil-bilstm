@@ -107,15 +107,18 @@ def save_bilstm(model, output_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--output_dir", type=str, required=True)
-    parser.add_argument("--augmented", action="store_true")
+    parser.add_argument("--data_dir", type=str, required=True, help="Directory containing the dataset.")
+    parser.add_argument("--output_dir", type=str, required=True, help="Directory where to save the model.")
+    parser.add_argument("--augmented", action="store_true", help="Wether to use the augmented dataset for knowledge distillation")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--lr", type=float, default=5e-5)
-    parser.add_argument("--lr_schedule", type=str)
-    parser.add_argument("--warmup_steps", type=int, default=0)
-    parser.add_argument("--epochs_per_cycle", type=int, default=1)
+    parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate.")
+    parser.add_argument("--lr_schedule", type=str, choices=["constant", "warmup", "cyclic"],
+        help="Schedule to use for the learning rate. Choices are: constant, linear warmup & decay, cyclic.")
+    parser.add_argument("--warmup_steps", type=int, default=0,
+        help="Warmup steps for the 'warmup' learning rate schedule. Ignored otherwise.")
+    parser.add_argument("--epochs_per_cycle", type=int, default=1,
+        help="Epochs per cycle for the 'cyclic' learning rate schedule. Ignored otherwise.")
     parser.add_argument("--do_train", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no_cuda", action="store_true")
