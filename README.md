@@ -50,9 +50,13 @@ optional arguments:
 
 Example:
 
-`python train_bert.py --data_dir SST-2 --output_dir bert_output --epochs 1 --batch_size 16 --lr 1e-5 --lr_schedule warmup --warmup_steps 100 --do_train`
+```
+python train_bert.py --data_dir SST-2 --output_dir bert_output --epochs 1 --batch_size 16 --lr 1e-5 --lr_schedule warmup --warmup_steps 100 --do_train
+```
 
 ### Generating the augmented dataset
+
+The file used in my tests is saved in this repo as SST-2/augmented.tsv, but you may want to generate one with another random seed.
 
 ```
 >> python augment_dataset.py --help
@@ -73,7 +77,9 @@ optional arguments:
 
 Example:
 
-`python augment_dataset.py --input SST-2/train.tsv --output SST-2/augmented.tsv --model bert_output`
+```
+python augment_dataset.py --input SST-2/train.tsv --output SST-2/augmented.tsv --model bert_output
+```
 
 ### Training the BiLSTM model
 
@@ -114,4 +120,6 @@ optional arguments:
 
 Example:
 
-`python train_bert.py --data_dir SST-2 --output_dir bilstm_output --epochs 1 --batch_size 50 --lr 1e-3 --lr_schedule warmup --warmup_steps 100 --do_train --augmented`
+```
+python train_bert.py --data_dir SST-2 --output_dir bilstm_output --epochs 1 --batch_size 50 --lr 1e-3 --lr_schedule warmup --warmup_steps 100 --do_train --augmented
+```
