@@ -49,10 +49,11 @@ if __name__ == "__main__":
     bert_config = BertConfig.from_pretrained("bert-large-uncased", cache_dir=args.cache_dir)
     bert_model = BertForSequenceClassification.from_pretrained("bert-large-uncased", config=bert_config, cache_dir=args.cache_dir).to(device)
     bert_tokenizer = BertTokenizer.from_pretrained("bert-large-uncased", do_lower_case=True, cache_dir=args.cache_dir)
-    train_dataset, valid_dataset, vocab = load_data(args.data_dir, bert_tokenizer.tokenize,
-        bert_vocab=bert_tokenizer.vocab, batch_first=True)
+    train_dataset, valid_dataset, _ = load_data(args.data_dir, bert_tokenizer.tokenize,
+        bert_vocab=BertVocab(bert_tokenizer.vocab), batch_first=True)
     
-    trainer = BertTrainer(bert_model, "cross_entropy", device,
+    trainer = BertTrainer(bert_model, device,
+        loss="cross_entropy",
         train_dataset=train_dataset,
         val_dataset=valid_dataset, val_interval=250,
         checkpt_callback=lambda m, step: save_bert(m, bert_tokenizer, bert_config, os.path.join(args.output_dir, "checkpt_%d" % step)),

@@ -10,7 +10,8 @@ from tensorboardX import SummaryWriter
 from tqdm.autonotebook import tqdm, trange
 
 class Trainer():
-    def __init__(self, model, loss, device,
+    def __init__(self, model, device,
+        loss="cross_entropy",
         train_dataset=None,
         temperature=1.0,
         val_dataset=None, val_interval=1,
@@ -40,12 +41,11 @@ class Trainer():
             self.loss_function = nn.KLDivLoss(reduction="sum")
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         if self.train_dataset is not None:
-            # TODO use bucked iterator
-            self.train_it = data.Iterator(self.train_dataset, self.batch_size, train=True, shuffle=True, device=self.device)
+            self.train_it = data.BucketIterator(self.train_dataset, self.batch_size, train=True, sort_key=lambda x: len(x.text), device=self.device)
         else:
             self.train_it = None
         if self.val_dataset is not None:
-            self.val_it = data.Iterator(self.val_dataset, self.batch_size, train=False, sort_key=lambda x: len(x.text), device=self.device)
+            self.val_it = data.BucketIterator(self.val_dataset, self.batch_size, train=False, sort_key=lambda x: len(x.text), device=self.device)
         else:
             self.val_it = None
     def get_loss(self, model_output, label, curr_batch_size):
@@ -135,7 +135,7 @@ class Trainer():
             "perplexity": np.exp(val_loss),
             "accuracy": val_accuracy
         }
-    def infer(self, dataset):
+    def infer(self, dataset, softmax=False):
         self.model.eval()
         outputs_idx = 0
         outputs = np.empty(shape=(len(dataset), 2))
@@ -144,11 +144,29 @@ class Trainer():
             with torch.no_grad():
                 batch, _, batch_size = self.process_batch(batch)
                 output = self.model(**batch)[0]
+                if softmax:
+                    output = F.softmax(output, dim=-1)
                 outputs[outputs_idx:outputs_idx + batch_size] = output.detach().cpu().numpy()
                 outputs_idx += batch_size
                 del output
         return outputs
-    def process_batch(self):
+    def infer_one(self, example, text_field=None, softmax=False):
+        self.model.eval()
+        if text_field is None:
+            text_field = self.train_dataset.fields["text"]
+        example = text_field.preprocess(example)
+        tokens, length  = text_field.process([example])
+        with torch.no_grad():
+            batch = self.process_one(tokens, length)
+            output = self.model(**batch)[0]
+            if softmax:
+                output = F.softmax(output, dim=-1)
+            output = output.detach().cpu().numpy()
+        return output[0]
+    def process_batch(self, *args):
+        # Implemented by subclasses
+        raise NotImplementedError()
+    def process_one(self, *args):
         # Implemented by subclasses
         raise NotImplementedError()
 
@@ -164,6 +182,11 @@ class BertTrainer(Trainer):
             "attention_mask": attention_mask
         }
         return batch, label, tokens.size(0)
+    def process_one(self, tokens, length):
+        return {
+            "input_ids": tokens.to(self.device),
+            "attention_mask": torch.ones(tokens.size(), dtype=torch.float32, device=self.device)
+        }
 
 class LSTMTrainer(Trainer):
     def process_batch(self, batch):
@@ -174,3 +197,8 @@ class LSTMTrainer(Trainer):
             "length": length,
         }
         return batch, label, tokens.size(1)
+    def process_one(self, tokens, length):
+        return {
+            "seq": tokens.to(self.device),
+            "length": length.to(self.device)
+        }

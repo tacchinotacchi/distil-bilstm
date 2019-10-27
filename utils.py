@@ -49,10 +49,10 @@ def load_tsv(path, skip_header=True):
         data = [row for row in reader]
     return data
 
-def load_data(data_dir, tokenizer, bert_vocab=None, batch_first=False, augmented=False):
+def load_data(data_dir, tokenizer, vocab=None, batch_first=False, augmented=False, use_teacher=False):
     text_field = data.Field(sequential=True, tokenize=tokenizer, lower=True, include_lengths=True, batch_first=batch_first)
     label_field_class = data.Field(sequential=False, use_vocab=False, dtype=torch.long)
-    if augmented:
+    if augmented or use_teacher:
         # Augmented dataset uses class scores as labels
         label_field_scores = data.Field(sequential=False, batch_first=True, use_vocab=False,
             preprocessing=lambda x: [float(n) for n in x.split(" ")], dtype=torch.float32)
@@ -60,8 +60,15 @@ def load_data(data_dir, tokenizer, bert_vocab=None, batch_first=False, augmented
     else:
         # Original training set uses the class id
         fields_train = [("text", text_field), ("label", label_field_class)]
+
+    if augmented:
+        train_file = "augmented.tsv"
+    elif use_teacher:
+        train_file = "noaugmented.tsv"
+    else:
+        train_file = "train.tsv"
     train_dataset = data.TabularDataset(
-        path=os.path.join(data_dir, "augmented.tsv" if augmented else "train.tsv"),
+        path=os.path.join(data_dir, train_file),
         format="tsv",  skip_header=True,
         fields=fields_train
     )
@@ -74,11 +81,36 @@ def load_data(data_dir, tokenizer, bert_vocab=None, batch_first=False, augmented
     )
 
     # Initialize field's vocabulary
-    if bert_vocab is None:
+    if vocab is None:
         vectors = pretrained_aliases["fasttext.en.300d"](cache=".cache/")
         text_field.build_vocab(train_dataset, vectors=vectors)
     else:
         # Use bert tokenizer's vocab if supplied
-        text_field.vocab = BertVocab(bert_vocab)
+        text_field.vocab = vocab
 
-    return train_dataset, valid_dataset, text_field.vocab
+    return train_dataset, valid_dataset, text_field
+
+from trainer import LSTMTrainer
+from train_bilstm import BiLSTMClassifier
+
+def get_model_wrapper(model_weights, text_field, device=None):
+    if isinstance(text_field, str):
+        text_field = torch.load(text_field)
+    if isinstance(model_weights, str):
+        model_weights = torch.load(model_weights)
+    if device is None:
+        device = torch.device("cpu")
+
+    vocab = text_field.vocab
+    model = BiLSTMClassifier(2, len(vocab.itos), vocab.vectors.shape[-1],
+        lstm_hidden_size=300, classif_hidden_size=400, dropout_rate=0.15).to(device)
+    model.load_state_dict(model_weights)
+    trainer = LSTMTrainer(model, device)
+    
+    def model_wrapper(text):
+        outputs = trainer.infer_one(text, text_field, softmax=True)
+        return {
+            "Negative": outputs[0],
+            "Positive": outputs[1]
+        }
+    return model_wrapper

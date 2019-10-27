@@ -110,6 +110,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, required=True, help="Directory containing the dataset.")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory where to save the model.")
     parser.add_argument("--augmented", action="store_true", help="Wether to use the augmented dataset for knowledge distillation")
+    parser.add_argument("--use_teacher", action="store_true", help="Use scores from BERT as labels")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate.")
@@ -129,14 +130,16 @@ if __name__ == "__main__":
     device = torch.device("cuda" if not args.no_cuda and torch.cuda.is_available() else "cpu")
     set_seed(args.seed)
 
-    train_dataset, valid_dataset, vocab = load_data(args.data_dir, spacy_tokenizer, augmented=args.augmented)
+    train_dataset, valid_dataset, text_field = load_data(args.data_dir, spacy_tokenizer, augmented=args.augmented, use_teacher=args.use_teacher)
+    vocab = text_field.vocab
 
     model = BiLSTMClassifier(2, len(vocab.itos), vocab.vectors.shape[-1],
-        lstm_hidden_size=300, classif_hidden_size=400, dropout_rate=0.0).to(device)
+        lstm_hidden_size=300, classif_hidden_size=400, dropout_rate=0.15).to(device)
     # Initialize word embeddings to fasttext
     model.init_embedding(vocab.vectors.to(device))
     
-    trainer = LSTMTrainer(model, "mse" if args.augmented else "cross_entropy", device,
+    trainer = LSTMTrainer(model, device,
+        loss="mse" if args.augmented or args.use_teacher else "cross_entropy",
         train_dataset=train_dataset, val_dataset=valid_dataset, val_interval=250,
         checkpt_callback=lambda m, step: save_bilstm(m, os.path.join(args.output_dir, "checkpt_%d" % step)), checkpt_interval=250,
         batch_size=args.batch_size, lr=args.lr)

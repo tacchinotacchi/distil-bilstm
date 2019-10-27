@@ -8,13 +8,13 @@ import torch
 from torchtext import data
 from transformers import BertForSequenceClassification, BertTokenizer
 from trainer import BertTrainer
-from utils import spacy_en, load_tsv, set_seed, BertVocab
+from utils import spacy_en, spacy_tokenizer, load_tsv, set_seed, BertVocab
 
 def build_pos_dict(sentences):
     pos_dict = {}
     for sentence in sentences:
         for word in sentence:   
-            pos_tag = word.pos
+            pos_tag = word.pos_
             if pos_tag not in pos_dict:
                 pos_dict[pos_tag] = []
             if word.text.lower() not in pos_dict[pos_tag]:
@@ -61,6 +61,7 @@ if __name__ == "__main__":
     parser.add_argument("--input", type=str, required=True, help="Input dataset.")
     parser.add_argument("--output", type=str, required=True, help="Output dataset.")
     parser.add_argument("--model", type=str, required=True, help="Model to use to generate the labels for the augmented dataset.")
+    parser.add_argument("--no_augment", action="store_true", help="Don't perform data augmentation")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--no_cuda", action="store_true")
     args = parser.parse_args()
@@ -69,13 +70,14 @@ if __name__ == "__main__":
     
     # Load original tsv file
     input_tsv = load_tsv(args.input)
-    sentences = [spacy_en(text) for text, _ in tqdm(input_tsv, desc="Loading dataset")]
-
-    # build lists of words indexes by POS tab
-    pos_dict = build_pos_dict(sentences)
-
-    # Generate augmented samples
-    sentences = augmentation(sentences, pos_dict)
+    if not args.no_augment:
+        sentences = [spacy_en(text) for text, _ in tqdm(input_tsv, desc="Loading dataset")]
+        # build lists of words indexes by POS tab
+        pos_dict = build_pos_dict(sentences)
+        # Generate augmented samples
+        sentences = augmentation(sentences, pos_dict)
+    else:
+        sentences = [text for text, _ in input_tsv]
 
     # Load teacher model
     model = BertForSequenceClassification.from_pretrained(args.model).to(device)
@@ -84,18 +86,21 @@ if __name__ == "__main__":
     # Assign labels with teacher
     teacher_field = data.Field(sequential=True, tokenize=tokenizer.tokenize, lower=True, include_lengths=True, batch_first=True)
     fields = [("text", teacher_field)]
-    examples = [
-        data.Example.fromlist([" ".join(words)], fields) for words in sentences
-    ]
+    if not args.no_augment:
+        examples = [data.Example.fromlist([" ".join(words)], fields) for words in sentences]
+    else:
+        examples = [data.Example.fromlist([text], fields) for text in sentences]
     augmented_dataset = data.Dataset(examples, fields)
     teacher_field.vocab = BertVocab(tokenizer.vocab)
-    new_labels = BertTrainer(model, "cross_entropy", device, batch_size=args.batch_size).infer(augmented_dataset)
+    new_labels = BertTrainer(model, device, batch_size=args.batch_size).infer(augmented_dataset)
 
     # Write to file
     with open(args.output, "w") as f:
         f.write("sentence\tscores\n")
         for sentence, rating in zip(sentences, new_labels):
-            text = " ".join(sentence)
+            if not args.no_augment:
+                text = " ".join(sentence)
+            else: text = sentence
             f.write("%s\t%.6f %.6f\n" % (text, *rating))
         
     
