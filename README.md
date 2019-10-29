@@ -1,5 +1,7 @@
 # distil-bilstm
 
+[![Run on FloydHub](https://static.floydhub.com/button/button-small.svg)](https://floydhub.com/run)
+
 This repository contains scripts to train a tiny bidirectional LSTM classifier on the SST-2 dataset (url).
 It also contains a script to fine-tune `bert-large-uncased` on the same task.
 The procedure is inspired by the paper [Distilling Task-Specific Knowledge from BERT into Simple Neural Networks](https://arxiv.org/abs/1903.12136).
