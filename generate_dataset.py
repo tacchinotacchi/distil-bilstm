@@ -31,7 +31,7 @@ def make_sample(input_sentence, pos_dict, p_mask=0.1, p_pos=0.1, p_ng=0.25, max_
         if u < p_mask:
             sentence.append(mask_token)
         elif u < (p_mask + p_pos):
-            same_pos = pos_dict[word.pos]
+            same_pos = pos_dict[word.pos_]
             # Pick from list of words with same POS tag
             sentence.append(np.random.choice(same_pos))
         else:

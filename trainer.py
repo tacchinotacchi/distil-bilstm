@@ -16,12 +16,13 @@ class Trainer():
         temperature=1.0,
         val_dataset=None, val_interval=1,
         checkpt_callback=None, checkpt_interval=1,
-        max_grad_norm=1.0, batch_size=50, lr=5e-5, weight_decay=0.0):
+        max_grad_norm=1.0, batch_size=64, gradient_accumulation_steps=1,
+        lr=5e-5, weight_decay=0.0):
         # Storing
         self.model = model
-        self.train_dataset = train_dataset
         self.device = device
         self.loss_option = loss
+        self.train_dataset = train_dataset
         self.temperature = temperature
         self.val_dataset = val_dataset
         self.val_interval = val_interval
@@ -29,6 +30,7 @@ class Trainer():
         self.checkpt_interval = checkpt_interval
         self.max_grad_norm = max_grad_norm
         self.batch_size = batch_size
+        self.gradient_accumulation_steps = gradient_accumulation_steps
         self.lr = lr
         self.weight_decay = weight_decay
         # Initialization
@@ -68,33 +70,36 @@ class Trainer():
         s_logits = self.model(**batch)[0]
         loss = self.get_loss(s_logits, label, curr_batch_size)
         loss.backward()
-        # Apply gradient clipping
-        nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-        self.optimizer.step()
-        if self.scheduler is not None:
-            # Advance learning rate schedule
-            self.scheduler.step()
-        self.model.zero_grad()
-        # Save stats to tensorboard
-        self.tb_writer.add_scalar("lr",
-            self.scheduler.get_lr()[0] if self.scheduler is not None else self.lr,
-            self.global_step)
-        self.tb_writer.add_scalar("loss", loss, self.global_step)
-        self.global_step += 1
-        # Every val_interval steps, evaluate and log stats to tensorboard
-        if self.val_dataset is not None and (self.global_step + 1) % self.val_interval == 0:
-            results = self.evaluate()
-            print(results)
-            for k, v in results.items():
-                self.tb_writer.add_scalar("val_" + k, v, self.global_step)
-        # Every checkpt_interval steps, call checkpt_callback to save a checkpoint
-        if self.checkpt_callback is not None and (self.global_step + 1) % self.checkpt_interval == 0:
-            self.checkpt_callback(self.model, self.global_step)
+        self.training_step += 1
+        if self.training_step % self.gradient_accumulation_steps == 0:
+            # Apply gradient clipping
+            nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+            self.optimizer.step()
+            if self.scheduler is not None:
+                # Advance learning rate schedule
+                self.scheduler.step()
+            self.model.zero_grad()
+            # Save stats to tensorboard
+            self.tb_writer.add_scalar("lr",
+                self.scheduler.get_lr()[0] if self.scheduler is not None else self.lr,
+                self.global_step)
+            self.tb_writer.add_scalar("loss", loss, self.global_step)
+            self.global_step += 1
+            # Every val_interval steps, evaluate and log stats to tensorboard
+            if self.val_interval >= 0 and (self.global_step + 1) % self.val_interval == 0:
+                results = self.evaluate()
+                print(results)
+                for k, v in results.items():
+                    self.tb_writer.add_scalar("val_" + k, v, self.global_step)
+            # Every checkpt_interval steps, call checkpt_callback to save a checkpoint
+            if self.checkpt_interval >= 0 and (self.global_step + 1) % self.checkpt_interval == 0:
+                self.checkpt_callback(self.model, self.global_step)
     def train(self, epochs=1, schedule=None, **kwargs):
         # Initialization
         self.global_step = 0
+        self.training_step = 0
         self.tb_writer = SummaryWriter()
-        steps_per_epoch = len(self.train_dataset) // self.batch_size
+        steps_per_epoch = len(self.train_dataset) // self.batch_size // self.gradient_accumulation_steps
         total_steps = epochs * steps_per_epoch
         # Initialize the learning rate scheduler if one has been chosen
         assert schedule is None or schedule in ["warmup", "cyclic"]
@@ -113,7 +118,7 @@ class Trainer():
             cycle_momentum=False)
         # The loop over epochs, batches
         for epoch in trange(epochs, desc="Training"):
-            for batch in tqdm(self.train_it, desc="Epoch %d" % epoch, total=len(self.train_it)):
+            for batch in tqdm(self.train_it, desc="Epoch %d" % epoch):
                 self.train_step(batch)
         self.tb_writer.close()
         del self.tb_writer
@@ -121,7 +126,7 @@ class Trainer():
         self.model.eval()
         val_loss = val_accuracy = 0.0
         loss_func = nn.CrossEntropyLoss(reduction="sum")
-        for batch in tqdm(self.val_it, desc="Evaluation", total=len(self.val_it)):
+        for batch in tqdm(self.val_it, desc="Evaluation"):
             with torch.no_grad():
                 batch, label, _ = self.process_batch(batch)
                 output = self.model(**batch)[0]
@@ -140,7 +145,7 @@ class Trainer():
         outputs_idx = 0
         outputs = np.empty(shape=(len(dataset), 2))
         infer_it = data.Iterator(dataset, self.batch_size, train=False, sort=False, device=self.device)
-        for batch in tqdm(infer_it, desc="Inference", total=len(infer_it)):
+        for batch in tqdm(infer_it, desc="Inference"):
             with torch.no_grad():
                 batch, _, batch_size = self.process_batch(batch)
                 output = self.model(**batch)[0]
