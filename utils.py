@@ -94,12 +94,12 @@ from trainer import LSTMTrainer
 from train_bilstm import BiLSTMClassifier
 
 def get_model_wrapper(model_weights, text_field, device=None):
-    if isinstance(text_field, str):
-        text_field = torch.load(text_field)
-    if isinstance(model_weights, str):
-        model_weights = torch.load(model_weights)
     if device is None:
         device = torch.device("cpu")
+    if isinstance(model_weights, str):
+        model_weights = torch.load(model_weights, map_location=device)
+    if isinstance(text_field, str):
+        text_field = torch.load(text_field, map_location=device)
 
     vocab = text_field.vocab
     model = BiLSTMClassifier(2, len(vocab.itos), vocab.vectors.shape[-1],
