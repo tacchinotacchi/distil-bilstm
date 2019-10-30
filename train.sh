@@ -9,7 +9,11 @@ fi
 DATA_DIR=$1
 OUTPUT_DIR=$2
 
-pip install -r requirements.txt
+if [ -z "$FLOYDHUB" ]
+	then 
+		pip install -r requirements.txt
+fi
+
 python -m spacy download en
 
 python train_bilstm.py --data_dir $DATA_DIR --output_dir $OUTPUT_DIR --augmented \
