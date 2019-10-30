@@ -8,15 +8,15 @@ The procedure is inspired by the paper [Distilling Task-Specific Knowledge from 
 
 ### Installing requirements
 
-```
-pip install -r requirements.txt
+```bash
+pip install -r requirements.txt  # Skip this if you are running on FloydHub
 python -m spacy download en
 ```
 
 ### Fine-tuning bert-large-uncased
 
 
-```
+```bash
 >> python train_bert.py --help
 
 usage: train_bert.py [-h] --data_dir DATA_DIR --output_dir OUTPUT_DIR
@@ -52,7 +52,7 @@ optional arguments:
 
 Example:
 
-```
+```bash
 python train_bert.py --data_dir SST-2 --output_dir bert_output --epochs 1 --batch_size 16 --lr 1e-5 --lr_schedule warmup --warmup_steps 100 --do_train
 ```
 
@@ -60,7 +60,7 @@ python train_bert.py --data_dir SST-2 --output_dir bert_output --epochs 1 --batc
 
 The file used in my tests is saved in this repo as SST-2/augmented.tsv, but you may want to generate one with another random seed.
 
-```
+```bash
 >> python augment_dataset.py --help
 
 usage: augment_dataset.py [-h] --input INPUT --output OUTPUT --model MODEL
@@ -79,13 +79,13 @@ optional arguments:
 
 Example:
 
-```
+```bash
 python augment_dataset.py --input SST-2/train.tsv --output SST-2/augmented.tsv --model bert_output
 ```
 
 ### Training the BiLSTM model
 
-```
+```bash
 >> python train_bilstm.py --help
 
 usage: train_bilstm.py [-h] --data_dir DATA_DIR --output_dir OUTPUT_DIR
@@ -122,6 +122,6 @@ optional arguments:
 
 Example:
 
-```
-python train_bert.py --data_dir SST-2 --output_dir bilstm_output --epochs 1 --batch_size 50 --lr 1e-3 --lr_schedule warmup --warmup_steps 100 --do_train --augmented
+```bash
+python train_bilstm.py --data_dir SST-2 --output_dir bilstm_output --epochs 1 --batch_size 50 --lr 1e-3 --lr_schedule warmup --warmup_steps 100 --do_train --augmented
 ```
