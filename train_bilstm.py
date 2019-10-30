@@ -113,6 +113,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_teacher", action="store_true", help="Use scores from BERT as labels")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate.")
     parser.add_argument("--lr_schedule", type=str, choices=["constant", "warmup", "cyclic"],
         help="Schedule to use for the learning rate. Choices are: constant, linear warmup & decay, cyclic.")
@@ -122,6 +123,7 @@ if __name__ == "__main__":
         help="Epochs per cycle for the 'cyclic' learning rate schedule. Ignored otherwise.")
     parser.add_argument("--do_train", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--checkpoint_interval", type=int, default=-1)
     parser.add_argument("--no_cuda", action="store_true")
     args = parser.parse_args()
 
@@ -141,8 +143,10 @@ if __name__ == "__main__":
     trainer = LSTMTrainer(model, device,
         loss="mse" if args.augmented or args.use_teacher else "cross_entropy",
         train_dataset=train_dataset, val_dataset=valid_dataset, val_interval=250,
-        checkpt_callback=lambda m, step: save_bilstm(m, os.path.join(args.output_dir, "checkpt_%d" % step)), checkpt_interval=250,
-        batch_size=args.batch_size, lr=args.lr)
+        checkpt_interval=args.checkpoint_interval,
+        checkpt_callback=lambda m, step: save_bilstm(m, os.path.join(args.output_dir, "checkpt_%d" % step)),
+        batch_size=args.batch_size, gradient_accumulation_steps=args.gradient_accumulation_steps,
+        lr=args.lr)
     
     if args.do_train:
         trainer.train(args.epochs, schedule=args.lr_schedule,

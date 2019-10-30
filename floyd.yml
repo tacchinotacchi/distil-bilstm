@@ -1,0 +1,6 @@
+env: pytorch-1.1
+machine: gpu
+data:
+  - source: alexamadori/datasets/sst-2-augmented
+    destination: sst-2-augmented
+command: sh train.sh /floyd/input/sst-2-augmented bilstm_augmented

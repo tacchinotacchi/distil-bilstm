@@ -26,6 +26,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, required=True, help="Directory where to save the model.")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate.")
     parser.add_argument("--lr_schedule", type=str, choices=["constant", "warmup", "cyclic"],
         help="Schedule to use for the learning rate. Choices are: constant, linear warmup & decay, cyclic.")
@@ -36,6 +37,7 @@ if __name__ == "__main__":
     parser.add_argument("--do_train", action="store_true")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--no_cuda", action="store_true")
+    parser.add_argument("--checkpoint_interval", type=int, default=-1)
     parser.add_argument("--cache_dir", type=str, help="Custom cache for transformer models.")
     args = parser.parse_args()
 
@@ -50,15 +52,16 @@ if __name__ == "__main__":
     bert_model = BertForSequenceClassification.from_pretrained("bert-large-uncased", config=bert_config, cache_dir=args.cache_dir).to(device)
     bert_tokenizer = BertTokenizer.from_pretrained("bert-large-uncased", do_lower_case=True, cache_dir=args.cache_dir)
     train_dataset, valid_dataset, _ = load_data(args.data_dir, bert_tokenizer.tokenize,
-        bert_vocab=BertVocab(bert_tokenizer.vocab), batch_first=True)
+        vocab=BertVocab(bert_tokenizer.vocab), batch_first=True)
     
     trainer = BertTrainer(bert_model, device,
         loss="cross_entropy",
         train_dataset=train_dataset,
         val_dataset=valid_dataset, val_interval=250,
         checkpt_callback=lambda m, step: save_bert(m, bert_tokenizer, bert_config, os.path.join(args.output_dir, "checkpt_%d" % step)),
-        checkpt_interval=250,
-        batch_size=args.batch_size, lr=args.lr)
+        checkpt_interval=args.checkpoint_interval,
+        batch_size=args.batch_size, gradient_accumulation_steps=args.gradient_accumulation_steps,
+        lr=args.lr)
     if args.do_train:
         trainer.train(args.epochs, schedule=args.lr_schedule,
             warmup_steps=args.warmup_steps, epochs_per_cycle=args.epochs_per_cycle)
