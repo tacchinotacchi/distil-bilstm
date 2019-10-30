@@ -9,7 +9,10 @@ from torchtext import data
 from torchtext.vocab import pretrained_aliases, Vocab
 
 import spacy
+from spacy.symbols import ORTH
+
 spacy_en = spacy.load("en")
+spacy_en.tokenizer.add_special_case("<mask>", [{ORTH: "<mask>"}])
 
 def set_seed(seed):
     np.random.seed(seed)
