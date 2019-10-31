@@ -12,6 +12,9 @@ OUTPUT_DIR=$2
 if [ -z "$FLOYDHUB" ]
 	then 
 		pip install -r requirements.txt
+	else
+		# TODO: Remove this when FloydHub's pytorch-1.2 env is out
+		pip install --upgrade torch==1.2.0+cu92 -f https://download.pytorch.org/whl/torch_stable.html
 fi
 
 python -m spacy download en
