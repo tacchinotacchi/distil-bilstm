@@ -58,7 +58,7 @@ python train_bert.py --data_dir SST-2 --output_dir bert_output --epochs 1 --batc
 
 ### Generating the augmented dataset
 
-The file used in my tests is saved in this repo as SST-2/augmented.tsv, but you may want to generate one with another random seed.
+The file used in my tests is available at https://www.floydhub.com/alexamadori/datasets/sst-2-augmented/1, but you may want to generate another one with a random seed or to use a different teacher model.
 
 ```bash
 >> python augment_dataset.py --help
