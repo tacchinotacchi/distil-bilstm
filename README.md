@@ -61,10 +61,11 @@ python train_bert.py --data_dir SST-2 --output_dir bert_output --epochs 1 --batc
 The file used in my tests is available at https://www.floydhub.com/alexamadori/datasets/sst-2-augmented/1, but you may want to generate another one with a random seed or to use a different teacher model.
 
 ```bash
->> python augment_dataset.py --help
+>> python generate_dataset.py --help
 
-usage: augment_dataset.py [-h] --input INPUT --output OUTPUT --model MODEL
-                          [--batch_size BATCH_SIZE] [--no_cuda]
+usage: generate_dataset.py [-h] --input INPUT --output OUTPUT --model MODEL
+                           [--no_augment] [--batch_size BATCH_SIZE]
+                           [--no_cuda]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -72,6 +73,7 @@ optional arguments:
   --output OUTPUT       Output dataset.
   --model MODEL         Model to use to generate the labels for the augmented
                         dataset.
+  --no_augment          Don't perform data augmentation
   --batch_size BATCH_SIZE
   --no_cuda
 
@@ -80,7 +82,7 @@ optional arguments:
 Example:
 
 ```bash
-python augment_dataset.py --input SST-2/train.tsv --output SST-2/augmented.tsv --model bert_output
+python generate_dataset.py --input SST-2/train.tsv --output SST-2/augmented.tsv --model bert_output
 ```
 
 ### Training the BiLSTM model
